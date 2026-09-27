@@ -151,7 +151,7 @@ export default function EarthHome() {
 
           <div
             key={introKey}
-            className={`${styles.earthSystem} ${introRunning ? styles.introRunning : ""}`}
+            className={styles.earthSystem}
             style={{
               transform: `translate3d(-50%, -46%, 0) scale(${zoom}) rotateX(${rotation.x * 0.12}deg)`,
             }}
