@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { PointerEvent, WheelEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent, WheelEvent } from "react";
 import styles from "./EarthHome.module.css";
 
 const WORLD_HINTS = [
@@ -42,10 +43,12 @@ export default function EarthHome() {
 
   useEffect(() => {
     if (!introRunning) return;
+
     const timer = window.setTimeout(() => {
       setIntroRunning(false);
       window.localStorage.setItem("lee-universe-intro-seen", "1");
     }, 5600);
+
     return () => window.clearTimeout(timer);
   }, [introKey, introRunning]);
 
@@ -74,6 +77,7 @@ export default function EarthHome() {
 
   function handlePointerUp(event: PointerEvent<HTMLDivElement>) {
     drag.current.active = false;
+
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -101,6 +105,7 @@ export default function EarthHome() {
         <Link href="/" className={styles.brand} aria-label="Lee Charles Laing home">
           LEE CHARLES LAING
         </Link>
+
         <nav className={styles.nav} aria-label="Primary navigation">
           <a href="#home" className={styles.activeNav}>Home</a>
           <a href="#universe">Universe</a>
@@ -124,7 +129,7 @@ export default function EarthHome() {
           onPointerCancel={handlePointerUp}
           onWheel={handleWheel}
           role="application"
-          aria-label="Drag to rotate Earth. Use the mouse wheel or pinch gesture area to change scale."
+          aria-label="Drag to rotate Earth. Use the mouse wheel to zoom the universe view."
         >
           {WORLD_HINTS.map((world) => (
             <button
@@ -148,7 +153,7 @@ export default function EarthHome() {
             key={introKey}
             className={`${styles.earthSystem} ${introRunning ? styles.introRunning : ""}`}
             style={{
-              transform: `translate3d(0, 2vh, 0) scale(${zoom}) rotateX(${rotation.x * 0.12}deg)`,
+              transform: `translate3d(-50%, -46%, 0) scale(${zoom}) rotateX(${rotation.x * 0.12}deg)`,
             }}
           >
             <div className={styles.sunrise} aria-hidden="true" />
