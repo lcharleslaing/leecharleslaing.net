@@ -56,16 +56,10 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
         </label>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <button
-            formAction={signIn}
-            className="rounded-lg bg-gray-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-gray-800"
-          >
+          <button formAction={signIn} className="button-primary px-4 py-3 text-sm">
             Sign in
           </button>
-          <button
-            formAction={signUp}
-            className="rounded-lg border border-gray-300 px-4 py-3 text-sm font-semibold transition hover:bg-gray-50"
-          >
+          <button formAction={signUp} className="button-secondary px-4 py-3 text-sm">
             Create account
           </button>
         </div>
