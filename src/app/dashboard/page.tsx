@@ -20,7 +20,7 @@ export default async function DashboardPage() {
           <h1 className="mt-1 text-xl font-semibold">Dashboard</h1>
         </div>
         <form action={signOut}>
-          <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium transition hover:bg-gray-50">
+          <button className="button-secondary px-4 py-2 text-sm">
             Sign out
           </button>
         </form>
