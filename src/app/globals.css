@@ -24,11 +24,60 @@ body {
 }
 
 a {
-  color: inherit;
   text-decoration: none;
 }
 
 button,
 input {
   font: inherit;
+}
+
+input {
+  background: #ffffff;
+  color: #111827;
+}
+
+.button-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #111827;
+  border-radius: 0.5rem;
+  background: #111827;
+  color: #ffffff !important;
+  font-weight: 600;
+  line-height: 1.25rem;
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.button-primary:hover {
+  background: #1f2937;
+  border-color: #1f2937;
+}
+
+.button-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d1d5db;
+  border-radius: 0.5rem;
+  background: #ffffff;
+  color: #111827 !important;
+  font-weight: 600;
+  line-height: 1.25rem;
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.button-secondary:hover {
+  background: #f9fafb;
+  border-color: #9ca3af;
+}
+
+.button-primary:focus-visible,
+.button-secondary:focus-visible,
+input:focus-visible {
+  outline: 2px solid #111827;
+  outline-offset: 2px;
 }
