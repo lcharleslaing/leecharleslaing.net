@@ -25,6 +25,10 @@ const HOME_CAMERA = new THREE.Vector3(0, 0.35, 8.3);
 const ENTER_DISTANCE = 1.15;
 const EXIT_DISTANCE = 28;
 
+type ThreeUniverseProps = {
+  resetSignal?: number;
+};
+
 function latLonToVector3(lat: number, lon: number, radius: number) {
   const phi = (90 - lat) * (Math.PI / 180);
   const theta = (lon + 180) * (Math.PI / 180);
@@ -61,8 +65,9 @@ function createLabel(text: string) {
   return labelEl;
 }
 
-export default function ThreeUniverse() {
+export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const lastResetSignal = useRef(resetSignal);
   const [path, setPath] = useState<UniverseNode[]>([universeRoot]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [resetVersion, setResetVersion] = useState(0);
@@ -70,7 +75,7 @@ export default function ThreeUniverse() {
   const currentSystem = path[path.length - 1];
   const breadcrumb = useMemo(() => path.map((node) => node.name).join("  /  "), [path]);
 
-  function goHome() {
+  function hardResetToEarth() {
     setSelectedName(null);
     setPath([universeRoot]);
     setResetVersion((current) => current + 1);
@@ -85,6 +90,12 @@ export default function ThreeUniverse() {
     setSelectedName(null);
     setPath((current) => current.slice(0, -1));
   }
+
+  useEffect(() => {
+    if (lastResetSignal.current === resetSignal) return;
+    lastResetSignal.current = resetSignal;
+    hardResetToEarth();
+  }, [resetSignal]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -131,6 +142,7 @@ export default function ThreeUniverse() {
     controls.minDistance = 0.52;
     controls.maxDistance = 120;
     controls.target.set(0, 0, 0);
+    controls.update();
 
     scene.add(new THREE.AmbientLight(0x6b7ba6, 0.72));
 
@@ -144,19 +156,24 @@ export default function ThreeUniverse() {
 
     const textureLoader = new THREE.TextureLoader();
     const centerGroup = new THREE.Group();
+    const surfaceGroup = new THREE.Group();
+    centerGroup.add(surfaceGroup);
     scene.add(centerGroup);
 
     let earthMap: THREE.Texture | null = null;
     let cloudMap: THREE.Texture | null = null;
     let centerMesh: THREE.Mesh;
-    let clouds: THREE.Mesh | null = null;
 
     if (currentSystem.id === "earth") {
+      // Temporary remote textures. These will be replaced with local PWA-safe assets.
       earthMap = textureLoader.load("https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg");
       earthMap.colorSpace = THREE.SRGBColorSpace;
-
       cloudMap = textureLoader.load("https://threejs.org/examples/textures/planets/earth_clouds_1024.png");
       cloudMap.colorSpace = THREE.SRGBColorSpace;
+
+      // The tilt belongs to the whole Earth surface system so texture, clouds,
+      // atmosphere and latitude/longitude presence points stay locked together.
+      surfaceGroup.rotation.z = THREE.MathUtils.degToRad(-6);
 
       centerMesh = new THREE.Mesh(
         new THREE.SphereGeometry(2.05, 96, 96),
@@ -167,10 +184,9 @@ export default function ThreeUniverse() {
           specular: new THREE.Color(0x22384a),
         }),
       );
-      centerMesh.rotation.z = THREE.MathUtils.degToRad(-6);
-      centerGroup.add(centerMesh);
+      surfaceGroup.add(centerMesh);
 
-      clouds = new THREE.Mesh(
+      const clouds = new THREE.Mesh(
         new THREE.SphereGeometry(2.075, 96, 96),
         new THREE.MeshPhongMaterial({
           map: cloudMap,
@@ -179,10 +195,9 @@ export default function ThreeUniverse() {
           depthWrite: false,
         }),
       );
-      clouds.rotation.z = centerMesh.rotation.z;
-      centerGroup.add(clouds);
+      surfaceGroup.add(clouds);
 
-      centerGroup.add(
+      surfaceGroup.add(
         new THREE.Mesh(
           new THREE.SphereGeometry(2.12, 64, 64),
           new THREE.MeshBasicMaterial({
@@ -200,11 +215,11 @@ export default function ThreeUniverse() {
       for (const [lat, lon] of presence) {
         const orb = new THREE.Mesh(glowGeometry, glowMaterial.clone());
         orb.position.copy(latLonToVector3(lat, lon, 2.105));
-        centerGroup.add(orb);
+        surfaceGroup.add(orb);
 
         const halo = new THREE.PointLight(0xffa64d, 0.65, 0.55, 2);
         halo.position.copy(orb.position);
-        centerGroup.add(halo);
+        surfaceGroup.add(halo);
       }
     } else {
       centerMesh = new THREE.Mesh(
@@ -217,9 +232,9 @@ export default function ThreeUniverse() {
           metalness: 0.08,
         }),
       );
-      centerGroup.add(centerMesh);
+      surfaceGroup.add(centerMesh);
 
-      centerGroup.add(
+      surfaceGroup.add(
         new THREE.Mesh(
           new THREE.SphereGeometry(2.12, 64, 64),
           new THREE.MeshBasicMaterial({
@@ -290,7 +305,6 @@ export default function ThreeUniverse() {
       childMeshes.push({ node, mesh: planet, labelEl });
     });
 
-    // Entire star field is real 3D geometry. There are deliberately no fixed 2D stars.
     const starsGeometry = new THREE.BufferGeometry();
     const starCount = 4200;
     const positions = new Float32Array(starCount * 3);
@@ -299,14 +313,12 @@ export default function ThreeUniverse() {
       const radius = 16 + Math.random() * 170;
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(2 * Math.random() - 1);
-
       positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
       positions[i * 3 + 1] = radius * Math.cos(phi);
       positions[i * 3 + 2] = radius * Math.sin(phi) * Math.sin(theta);
     }
 
     starsGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-
     const starsMaterial = new THREE.PointsMaterial({
       color: 0xffffff,
       size: 0.04,
@@ -314,9 +326,7 @@ export default function ThreeUniverse() {
       opacity: 0.88,
       sizeAttenuation: true,
     });
-
-    const stars = new THREE.Points(starsGeometry, starsMaterial);
-    scene.add(stars);
+    scene.add(new THREE.Points(starsGeometry, starsMaterial));
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
@@ -335,8 +345,13 @@ export default function ThreeUniverse() {
       selectedNode = null;
       setSelectedName(null);
       clearSelectionStyles();
+
+      // Earth/current center becomes the orbit pivot immediately. The camera can
+      // still ease home, but any drag from this point rotates around the center.
+      controls.target.set(0, 0, 0);
       targetGoal.set(0, 0, 0);
       cameraGoal.copy(HOME_CAMERA);
+      controls.update();
       focusActive = true;
     };
 
@@ -354,9 +369,7 @@ export default function ThreeUniverse() {
       if (hits.length === 0) return null;
 
       const mesh = hits[0].object as THREE.Mesh;
-      if (mesh === centerMesh) {
-        return { type: "center" as const };
-      }
+      if (mesh === centerMesh) return { type: "center" as const };
 
       const child = childMeshes.find((item) => item.mesh === mesh);
       return child ? { type: "child" as const, item: child } : null;
@@ -430,8 +443,7 @@ export default function ThreeUniverse() {
 
     const handlePointerMove = (event: PointerEvent) => {
       if (pointerDown) return;
-      const hit = getHit(event);
-      renderer.domElement.style.cursor = hit ? "pointer" : "grab";
+      renderer.domElement.style.cursor = getHit(event) ? "pointer" : "grab";
     };
 
     const handlePointerLeave = () => {
@@ -463,9 +475,11 @@ export default function ThreeUniverse() {
       if (disposed) return;
       const delta = clock.getDelta();
 
+      // Slow self-rotation is applied to the complete surface group, not just the
+      // decorative skin. Lat/lon presence points therefore remain geographically
+      // attached to the same places while Earth turns.
       if (!pointerDown) {
-        centerMesh.rotation.y += delta * (currentSystem.id === "earth" ? 0.045 : 0.025);
-        if (clouds) clouds.rotation.y += delta * 0.058;
+        surfaceGroup.rotation.y += delta * (currentSystem.id === "earth" ? 0.045 : 0.025);
         orbitGroup.rotation.y += delta * 0.014;
       }
 
@@ -490,12 +504,7 @@ export default function ThreeUniverse() {
       controls.update();
 
       const targetDistance = camera.position.distanceTo(controls.target);
-
-      if (
-        !navigationLocked &&
-        selectedNode?.children?.length &&
-        targetDistance < ENTER_DISTANCE
-      ) {
+      if (!navigationLocked && selectedNode?.children?.length && targetDistance < ENTER_DISTANCE) {
         enterNode(selectedNode);
       }
 
@@ -576,7 +585,7 @@ export default function ThreeUniverse() {
       >
         <button
           type="button"
-          onClick={goHome}
+          onClick={hardResetToEarth}
           title="Return to Earth"
           aria-label="Return to Earth"
           style={{
