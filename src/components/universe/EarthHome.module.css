@@ -1,0 +1,183 @@
+.page {
+  position: relative;
+  min-height: 100svh;
+  overflow: hidden;
+  background: #02040a;
+  color: #f7f8fb;
+  isolation: isolate;
+}
+
+.header {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+  padding: 2.25rem 3.2rem;
+}
+
+.brand {
+  color: #f7f8fb;
+  font-size: clamp(0.78rem, 1vw, 1rem);
+  font-weight: 400;
+  letter-spacing: 0.52em;
+  white-space: nowrap;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: clamp(1.5rem, 3.4vw, 3.4rem);
+}
+
+.nav a {
+  position: relative;
+  color: rgba(247, 248, 251, 0.76);
+  font-size: 0.68rem;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  transition: color 180ms ease;
+}
+
+.nav a:hover,
+.nav a:focus-visible {
+  color: #fff;
+}
+
+.activeNav::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0.28em;
+  bottom: -0.85rem;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.hero {
+  position: relative;
+  min-height: 100svh;
+}
+
+.copy {
+  position: absolute;
+  z-index: 14;
+  top: 13.8%;
+  left: 50%;
+  width: min(90vw, 760px);
+  transform: translateX(-50%);
+  text-align: center;
+  pointer-events: none;
+}
+
+.copy p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: clamp(0.7rem, 1vw, 0.92rem);
+  letter-spacing: 0.54em;
+}
+
+.copy h1 {
+  margin: 1rem 0 0;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: clamp(0.62rem, 0.9vw, 0.84rem);
+  font-weight: 400;
+  letter-spacing: 0.31em;
+  text-transform: uppercase;
+}
+
+.universeStage {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+}
+
+.universeStage:active {
+  cursor: grabbing;
+}
+
+.explorePrompt {
+  position: absolute;
+  z-index: 14;
+  left: 50%;
+  bottom: 4.3%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  transform: translateX(-50%);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 0.61rem;
+  letter-spacing: 0.34em;
+  pointer-events: none;
+}
+
+.chevron {
+  width: 17px;
+  height: 17px;
+  border-right: 1px solid rgba(255, 255, 255, 0.75);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.75);
+  transform: rotate(45deg);
+  animation: chevronFloat 2.4s ease-in-out infinite;
+}
+
+@keyframes chevronFloat {
+  0%,
+  100% {
+    transform: translateY(0) rotate(45deg);
+    opacity: 0.5;
+  }
+
+  50% {
+    transform: translateY(5px) rotate(45deg);
+    opacity: 1;
+  }
+}
+
+@media (max-width: 860px) {
+  .header {
+    padding: 1.5rem 1.25rem;
+  }
+
+  .nav {
+    display: none;
+  }
+
+  .brand {
+    font-size: 0.7rem;
+    letter-spacing: 0.34em;
+  }
+
+  .copy {
+    top: 11.5%;
+    width: min(92vw, 520px);
+  }
+
+  .copy p {
+    font-size: 0.64rem;
+    letter-spacing: 0.35em;
+  }
+
+  .copy h1 {
+    font-size: 0.58rem;
+    letter-spacing: 0.2em;
+    line-height: 1.6;
+  }
+
+  .explorePrompt {
+    bottom: 5rem;
+    font-size: 0.56rem;
+    letter-spacing: 0.26em;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron {
+    animation: none;
+  }
+}
