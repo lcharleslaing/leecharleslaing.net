@@ -1,22 +1,43 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import ThreeUniverse from "./ThreeUniverse";
 import styles from "./EarthHome.module.css";
 
 export default function EarthHome() {
+  const [universeResetKey, setUniverseResetKey] = useState(0);
+
+  function resetUniverse() {
+    setUniverseResetKey((current) => current + 1);
+  }
+
   return (
     <main className={styles.page}>
-      <div className={styles.stars} aria-hidden="true" />
-      <div className={styles.nebula} aria-hidden="true" />
-
       <header className={styles.header}>
-        <Link href="/" className={styles.brand} aria-label="Lee Charles Laing home">
+        <Link
+          href="/"
+          className={styles.brand}
+          aria-label="Lee Charles Laing home"
+          onClick={(event) => {
+            event.preventDefault();
+            resetUniverse();
+          }}
+        >
           LEE CHARLES LAING
         </Link>
 
         <nav className={styles.nav} aria-label="Primary navigation">
-          <a href="#home" className={styles.activeNav}>Home</a>
+          <a
+            href="#home"
+            className={styles.activeNav}
+            onClick={(event) => {
+              event.preventDefault();
+              resetUniverse();
+            }}
+          >
+            Home
+          </a>
           <a href="#universe">Universe</a>
           <a href="#about">About</a>
           <a href="#journal">Journal</a>
@@ -31,7 +52,7 @@ export default function EarthHome() {
         </div>
 
         <div className={styles.universeStage}>
-          <ThreeUniverse />
+          <ThreeUniverse key={universeResetKey} />
         </div>
 
         <div className={styles.explorePrompt} aria-hidden="true">
