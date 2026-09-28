@@ -29,6 +29,8 @@ const EARTH_RADIUS = 2.05;
 const CLOUD_RADIUS = 2.053;
 const PRESENCE_RADIUS = 2.056;
 const SURFACE_NORMAL_AXIS = new THREE.Vector3(0, 0, 1);
+const SUN_DISTANCE = 20;
+const SUN_CLOCK_REFRESH_MS = 60_000;
 
 type ThreeUniverseProps = {
   resetSignal?: number;
@@ -47,6 +49,60 @@ function latLonToVector3(lat: number, lon: number, radius: number) {
     radius * Math.cos(phi),
     radius * Math.sin(phi) * Math.sin(theta),
   );
+}
+
+function normalizeDegrees(value: number) {
+  return ((value % 360) + 360) % 360;
+}
+
+function normalizeLongitude(value: number) {
+  const degrees = normalizeDegrees(value);
+  return degrees > 180 ? degrees - 360 : degrees;
+}
+
+// Approximate the point on Earth directly beneath the Sun for the supplied
+// instant. Date comes from the visitor's computer clock; converting that instant
+// to UTC gives us the correct global day/night orientation without hard-coding
+// any one timezone such as EST/EDT.
+function getSubsolarPoint(date: Date) {
+  const julianDay = date.getTime() / 86_400_000 + 2_440_587.5;
+  const daysSinceJ2000 = julianDay - 2_451_545.0;
+
+  const meanLongitude = normalizeDegrees(280.46 + 0.9856474 * daysSinceJ2000);
+  const meanAnomaly = THREE.MathUtils.degToRad(
+    normalizeDegrees(357.528 + 0.9856003 * daysSinceJ2000),
+  );
+
+  const eclipticLongitude = THREE.MathUtils.degToRad(
+    normalizeDegrees(
+      meanLongitude +
+        1.915 * Math.sin(meanAnomaly) +
+        0.02 * Math.sin(2 * meanAnomaly),
+    ),
+  );
+
+  const obliquity = THREE.MathUtils.degToRad(23.439 - 0.0000004 * daysSinceJ2000);
+  const declination = Math.asin(
+    Math.sin(obliquity) * Math.sin(eclipticLongitude),
+  );
+
+  const rightAscension = Math.atan2(
+    Math.cos(obliquity) * Math.sin(eclipticLongitude),
+    Math.cos(eclipticLongitude),
+  );
+
+  const rightAscensionDegrees = normalizeDegrees(
+    THREE.MathUtils.radToDeg(rightAscension),
+  );
+
+  const greenwichSiderealTime = normalizeDegrees(
+    280.46061837 + 360.98564736629 * (julianDay - 2_451_545.0),
+  );
+
+  return {
+    lat: THREE.MathUtils.radToDeg(declination),
+    lon: normalizeLongitude(rightAscensionDegrees - greenwichSiderealTime),
+  };
 }
 
 function getNodePosition(node: UniverseNode) {
@@ -87,7 +143,10 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
   const [resetVersion, setResetVersion] = useState(0);
 
   const currentSystem = path[path.length - 1];
-  const breadcrumb = useMemo(() => path.map((node) => node.name).join("  /  "), [path]);
+  const breadcrumb = useMemo(
+    () => path.map((node) => node.name).join("  /  "),
+    [path],
+  );
 
   function hardResetToEarth() {
     setSelectedName(null);
@@ -181,9 +240,13 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
 
     if (currentSystem.id === "earth") {
       // Temporary remote textures. These will be replaced with local PWA-safe assets.
-      earthMap = textureLoader.load("https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg");
+      earthMap = textureLoader.load(
+        "https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg",
+      );
       earthMap.colorSpace = THREE.SRGBColorSpace;
-      cloudMap = textureLoader.load("https://threejs.org/examples/textures/planets/earth_clouds_1024.png");
+      cloudMap = textureLoader.load(
+        "https://threejs.org/examples/textures/planets/earth_clouds_1024.png",
+      );
       cloudMap.colorSpace = THREE.SRGBColorSpace;
 
       // Texture, clouds, atmosphere and geographic markers share one transform,
@@ -230,9 +293,6 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
         marker.position.copy(markerPosition);
         orientMarkerToSurface(marker, markerPosition);
 
-        // These are surface decals, not little 3D satellites. CircleGeometry lies
-        // flat against the tangent plane of the globe, with only a tiny radial
-        // offset to avoid z-fighting.
         const halo = new THREE.Mesh(
           new THREE.CircleGeometry(0.065, 32),
           new THREE.MeshBasicMaterial({
@@ -302,7 +362,11 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
     scene.add(orbitGroup);
 
     const children = currentSystem.children ?? [];
-    const childMeshes: Array<{ node: UniverseNode; mesh: THREE.Mesh; labelEl: HTMLElement }> = [];
+    const childMeshes: Array<{
+      node: UniverseNode;
+      mesh: THREE.Mesh;
+      labelEl: HTMLElement;
+    }> = [];
 
     children.forEach((node, index) => {
       const radius = node.orbitRadius ?? 4.2;
@@ -334,7 +398,12 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       planet.userData.nodeId = node.id;
       orbitGroup.add(planet);
 
-      const light = new THREE.PointLight(node.color, index === 0 ? 1.1 : 0.55, 2.2, 2);
+      const light = new THREE.PointLight(
+        node.color,
+        index === 0 ? 1.1 : 0.55,
+        2.2,
+        2,
+      );
       light.position.copy(planet.position);
       orbitGroup.add(light);
 
@@ -360,7 +429,10 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       positions[i * 3 + 2] = radius * Math.sin(phi) * Math.sin(theta);
     }
 
-    starsGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    starsGeometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(positions, 3),
+    );
     const starsMaterial = new THREE.PointsMaterial({
       color: 0xffffff,
       size: 0.04,
@@ -403,7 +475,10 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
     const getHit = (event: PointerEvent | MouseEvent) => {
       setPointerFromEvent(event);
       raycaster.setFromCamera(pointer, camera);
-      const hits = raycaster.intersectObjects([centerMesh, ...childMeshes.map((item) => item.mesh)], false);
+      const hits = raycaster.intersectObjects(
+        [centerMesh, ...childMeshes.map((item) => item.mesh)],
+        false,
+      );
       if (hits.length === 0) return null;
 
       const mesh = hits[0].object as THREE.Mesh;
@@ -413,7 +488,11 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       return child ? { type: "child" as const, item: child } : null;
     };
 
-    const focusNode = (item: { node: UniverseNode; mesh: THREE.Mesh; labelEl: HTMLElement }) => {
+    const focusNode = (item: {
+      node: UniverseNode;
+      mesh: THREE.Mesh;
+      labelEl: HTMLElement;
+    }) => {
       selectedNode = item.node;
       setSelectedName(item.node.name);
 
@@ -448,7 +527,10 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
     };
 
     const handlePointerUp = (event: PointerEvent) => {
-      const moved = Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y);
+      const moved = Math.hypot(
+        event.clientX - pointerStart.x,
+        event.clientY - pointerStart.y,
+      );
       pointerDown = false;
       renderer.domElement.style.cursor = "grab";
 
@@ -524,13 +606,42 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
 
     const clock = new THREE.Clock();
     const markerWorldPosition = new THREE.Vector3();
+    const sunLocalPosition = new THREE.Vector3();
+    const sunWorldPosition = new THREE.Vector3();
+    let subsolarPoint = getSubsolarPoint(new Date());
+    let nextSunClockRefresh = Date.now() + SUN_CLOCK_REFRESH_MS;
+
+    const updateEarthSun = () => {
+      if (currentSystem.id !== "earth") return;
+
+      const now = Date.now();
+      if (now >= nextSunClockRefresh) {
+        subsolarPoint = getSubsolarPoint(new Date(now));
+        nextSunClockRefresh = now + SUN_CLOCK_REFRESH_MS;
+      }
+
+      // The Earth is intentionally given a slow decorative rotation. Transform
+      // the real-time Sun direction through that same surface transform so the
+      // daylight remains attached to the correct geographic longitudes while
+      // the globe turns visually.
+      sunLocalPosition.copy(
+        latLonToVector3(subsolarPoint.lat, subsolarPoint.lon, SUN_DISTANCE),
+      );
+      surfaceGroup.updateWorldMatrix(true, false);
+      sunWorldPosition.copy(sunLocalPosition);
+      surfaceGroup.localToWorld(sunWorldPosition);
+      sun.position.copy(sunWorldPosition);
+    };
+
+    updateEarthSun();
 
     const render = () => {
       if (disposed) return;
       const delta = clock.getDelta();
 
       if (!pointerDown) {
-        surfaceGroup.rotation.y += delta * (currentSystem.id === "earth" ? 0.045 : 0.025);
+        surfaceGroup.rotation.y +=
+          delta * (currentSystem.id === "earth" ? 0.045 : 0.025);
         orbitGroup.rotation.y += delta * 0.014;
       }
 
@@ -553,19 +664,25 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       }
 
       controls.update();
+      updateEarthSun();
 
-      // Keep geographic markers visually restrained as the camera approaches,
-      // without moving them away from the surface. Their position remains fixed;
-      // only their local decal size changes.
       presenceMarkers.forEach(({ group }) => {
         group.getWorldPosition(markerWorldPosition);
         const distanceToCamera = camera.position.distanceTo(markerWorldPosition);
-        const markerScale = THREE.MathUtils.clamp(distanceToCamera / HOME_DISTANCE, 0.05, 1);
+        const markerScale = THREE.MathUtils.clamp(
+          distanceToCamera / HOME_DISTANCE,
+          0.05,
+          1,
+        );
         group.scale.setScalar(markerScale);
       });
 
       const targetDistance = camera.position.distanceTo(controls.target);
-      if (!navigationLocked && selectedNode?.children?.length && targetDistance < ENTER_DISTANCE) {
+      if (
+        !navigationLocked &&
+        selectedNode?.children?.length &&
+        targetDistance < ENTER_DISTANCE
+      ) {
         enterNode(selectedNode);
       }
 
@@ -598,7 +715,9 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh) {
           object.geometry.dispose();
-          const materials = Array.isArray(object.material) ? object.material : [object.material];
+          const materials = Array.isArray(object.material)
+            ? object.material
+            : [object.material];
           materials.forEach((material) => material.dispose());
         }
       });
