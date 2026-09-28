@@ -39,6 +39,7 @@ function latLonToVector3(lat: number, lon: number, radius: number) {
 function getNodePosition(node: UniverseNode) {
   const radius = node.orbitRadius ?? 4.2;
   const angle = node.angle ?? 0;
+
   return new THREE.Vector3(
     Math.cos(angle) * radius,
     node.y ?? 0,
@@ -64,6 +65,7 @@ export default function ThreeUniverse() {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [path, setPath] = useState<UniverseNode[]>([universeRoot]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [resetVersion, setResetVersion] = useState(0);
 
   const currentSystem = path[path.length - 1];
   const breadcrumb = useMemo(() => path.map((node) => node.name).join("  /  "), [path]);
@@ -71,10 +73,15 @@ export default function ThreeUniverse() {
   function goHome() {
     setSelectedName(null);
     setPath([universeRoot]);
+    setResetVersion((current) => current + 1);
   }
 
   function goBack() {
-    if (path.length <= 1) return;
+    if (path.length <= 1) {
+      setResetVersion((current) => current + 1);
+      return;
+    }
+
     setSelectedName(null);
     setPath((current) => current.slice(0, -1));
   }
@@ -89,17 +96,15 @@ export default function ThreeUniverse() {
     let pointerDown = false;
     let pointerStart = { x: 0, y: 0 };
     let selectedNode: UniverseNode | null = null;
-    let selectedMesh: THREE.Mesh | null = null;
-    let selectedLabel: HTMLElement | null = null;
     let focusActive = false;
 
     const scene = new THREE.Scene();
-    scene.background = null;
+    scene.background = new THREE.Color(0x02040a);
 
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 400);
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 600);
     camera.position.copy(HOME_CAMERA);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -124,11 +129,10 @@ export default function ThreeUniverse() {
     controls.rotateSpeed = 0.52;
     controls.zoomSpeed = 1.05;
     controls.minDistance = 0.52;
-    controls.maxDistance = 60;
+    controls.maxDistance = 120;
     controls.target.set(0, 0, 0);
 
-    const ambient = new THREE.AmbientLight(0x6b7ba6, 0.72);
-    scene.add(ambient);
+    scene.add(new THREE.AmbientLight(0x6b7ba6, 0.72));
 
     const sun = new THREE.DirectionalLight(0xffd1a0, 3.1);
     sun.position.set(5, 2.5, 4);
@@ -150,6 +154,7 @@ export default function ThreeUniverse() {
     if (currentSystem.id === "earth") {
       earthMap = textureLoader.load("https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg");
       earthMap.colorSpace = THREE.SRGBColorSpace;
+
       cloudMap = textureLoader.load("https://threejs.org/examples/textures/planets/earth_clouds_1024.png");
       cloudMap.colorSpace = THREE.SRGBColorSpace;
 
@@ -177,16 +182,17 @@ export default function ThreeUniverse() {
       clouds.rotation.z = centerMesh.rotation.z;
       centerGroup.add(clouds);
 
-      const atmosphere = new THREE.Mesh(
-        new THREE.SphereGeometry(2.12, 64, 64),
-        new THREE.MeshBasicMaterial({
-          color: 0x55aaff,
-          transparent: true,
-          opacity: 0.055,
-          side: THREE.BackSide,
-        }),
+      centerGroup.add(
+        new THREE.Mesh(
+          new THREE.SphereGeometry(2.12, 64, 64),
+          new THREE.MeshBasicMaterial({
+            color: 0x55aaff,
+            transparent: true,
+            opacity: 0.055,
+            side: THREE.BackSide,
+          }),
+        ),
       );
-      centerGroup.add(atmosphere);
 
       const glowGeometry = new THREE.SphereGeometry(0.035, 14, 14);
       const glowMaterial = new THREE.MeshBasicMaterial({ color: 0xffd37d });
@@ -201,12 +207,11 @@ export default function ThreeUniverse() {
         centerGroup.add(halo);
       }
     } else {
-      const centerColor = currentSystem.color;
       centerMesh = new THREE.Mesh(
         new THREE.SphereGeometry(2.05, 96, 96),
         new THREE.MeshStandardMaterial({
-          color: centerColor,
-          emissive: centerColor,
+          color: currentSystem.color,
+          emissive: currentSystem.color,
           emissiveIntensity: 0.22,
           roughness: 0.7,
           metalness: 0.08,
@@ -214,17 +219,20 @@ export default function ThreeUniverse() {
       );
       centerGroup.add(centerMesh);
 
-      const centerGlow = new THREE.Mesh(
-        new THREE.SphereGeometry(2.12, 64, 64),
-        new THREE.MeshBasicMaterial({
-          color: centerColor,
-          transparent: true,
-          opacity: 0.07,
-          side: THREE.BackSide,
-        }),
+      centerGroup.add(
+        new THREE.Mesh(
+          new THREE.SphereGeometry(2.12, 64, 64),
+          new THREE.MeshBasicMaterial({
+            color: currentSystem.color,
+            transparent: true,
+            opacity: 0.07,
+            side: THREE.BackSide,
+          }),
+        ),
       );
-      centerGroup.add(centerGlow);
     }
+
+    centerMesh.userData.isCenter = true;
 
     const centerLabelEl = createLabel(currentSystem.name);
     centerLabelEl.style.fontSize = "12px";
@@ -241,14 +249,16 @@ export default function ThreeUniverse() {
 
     children.forEach((node, index) => {
       const radius = node.orbitRadius ?? 4.2;
-      const orbitGeometry = new THREE.RingGeometry(radius - 0.008, radius + 0.008, 220);
-      const orbitMaterial = new THREE.MeshBasicMaterial({
-        color: node.color,
-        transparent: true,
-        opacity: 0.045,
-        side: THREE.DoubleSide,
-      });
-      const orbitRing = new THREE.Mesh(orbitGeometry, orbitMaterial);
+
+      const orbitRing = new THREE.Mesh(
+        new THREE.RingGeometry(radius - 0.008, radius + 0.008, 220),
+        new THREE.MeshBasicMaterial({
+          color: node.color,
+          transparent: true,
+          opacity: 0.045,
+          side: THREE.DoubleSide,
+        }),
+      );
       orbitRing.rotation.x = Math.PI / 2;
       orbitGroup.add(orbitRing);
 
@@ -280,36 +290,55 @@ export default function ThreeUniverse() {
       childMeshes.push({ node, mesh: planet, labelEl });
     });
 
+    // Entire star field is real 3D geometry. There are deliberately no fixed 2D stars.
     const starsGeometry = new THREE.BufferGeometry();
-    const starCount = 2000;
+    const starCount = 4200;
     const positions = new Float32Array(starCount * 3);
 
     for (let i = 0; i < starCount; i += 1) {
-      const r = 18 + Math.random() * 70;
+      const radius = 16 + Math.random() * 170;
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(2 * Math.random() - 1);
-      positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
-      positions[i * 3 + 1] = r * Math.cos(phi);
-      positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+
+      positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
+      positions[i * 3 + 1] = radius * Math.cos(phi);
+      positions[i * 3 + 2] = radius * Math.sin(phi) * Math.sin(theta);
     }
 
     starsGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    const stars = new THREE.Points(
-      starsGeometry,
-      new THREE.PointsMaterial({
-        color: 0xffffff,
-        size: 0.035,
-        transparent: true,
-        opacity: 0.86,
-        sizeAttenuation: true,
-      }),
-    );
+
+    const starsMaterial = new THREE.PointsMaterial({
+      color: 0xffffff,
+      size: 0.04,
+      transparent: true,
+      opacity: 0.88,
+      sizeAttenuation: true,
+    });
+
+    const stars = new THREE.Points(starsGeometry, starsMaterial);
     scene.add(stars);
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     const targetGoal = new THREE.Vector3(0, 0, 0);
     const cameraGoal = HOME_CAMERA.clone();
+
+    const clearSelectionStyles = () => {
+      childMeshes.forEach(({ mesh, labelEl }, index) => {
+        const material = mesh.material as THREE.MeshStandardMaterial;
+        material.emissiveIntensity = index === 0 ? 0.48 : 0.3;
+        labelEl.style.opacity = "0.82";
+      });
+    };
+
+    const focusCenter = () => {
+      selectedNode = null;
+      setSelectedName(null);
+      clearSelectionStyles();
+      targetGoal.set(0, 0, 0);
+      cameraGoal.copy(HOME_CAMERA);
+      focusActive = true;
+    };
 
     const setPointerFromEvent = (event: PointerEvent | MouseEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -320,16 +349,21 @@ export default function ThreeUniverse() {
     const getHit = (event: PointerEvent | MouseEvent) => {
       setPointerFromEvent(event);
       raycaster.setFromCamera(pointer, camera);
-      const hits = raycaster.intersectObjects(childMeshes.map((item) => item.mesh), false);
+      const targets = [centerMesh, ...childMeshes.map((item) => item.mesh)];
+      const hits = raycaster.intersectObjects(targets, false);
       if (hits.length === 0) return null;
+
       const mesh = hits[0].object as THREE.Mesh;
-      return childMeshes.find((item) => item.mesh === mesh) ?? null;
+      if (mesh === centerMesh) {
+        return { type: "center" as const };
+      }
+
+      const child = childMeshes.find((item) => item.mesh === mesh);
+      return child ? { type: "child" as const, item: child } : null;
     };
 
     const focusNode = (item: { node: UniverseNode; mesh: THREE.Mesh; labelEl: HTMLElement }) => {
       selectedNode = item.node;
-      selectedMesh = item.mesh;
-      selectedLabel = item.labelEl;
       setSelectedName(item.node.name);
 
       childMeshes.forEach(({ mesh, labelEl }) => {
@@ -369,15 +403,28 @@ export default function ThreeUniverse() {
 
       if (moved > 5) return;
       const hit = getHit(event);
-      if (hit) focusNode(hit);
+      if (!hit) return;
+
+      if (hit.type === "center") {
+        focusCenter();
+        return;
+      }
+
+      focusNode(hit.item);
     };
 
     const handleDoubleClick = (event: MouseEvent) => {
       const hit = getHit(event);
       if (!hit) return;
-      focusNode(hit);
-      if (hit.node.children?.length) {
-        window.setTimeout(() => enterNode(hit.node), 180);
+
+      if (hit.type === "center") {
+        focusCenter();
+        return;
+      }
+
+      focusNode(hit.item);
+      if (hit.item.node.children?.length) {
+        window.setTimeout(() => enterNode(hit.item.node), 180);
       }
     };
 
@@ -387,12 +434,14 @@ export default function ThreeUniverse() {
       renderer.domElement.style.cursor = hit ? "pointer" : "grab";
     };
 
-    renderer.domElement.addEventListener("pointerdown", handlePointerDown);
-    renderer.domElement.addEventListener("pointerup", handlePointerUp);
-    renderer.domElement.addEventListener("pointerleave", () => {
+    const handlePointerLeave = () => {
       pointerDown = false;
       renderer.domElement.style.cursor = "grab";
-    });
+    };
+
+    renderer.domElement.addEventListener("pointerdown", handlePointerDown);
+    renderer.domElement.addEventListener("pointerup", handlePointerUp);
+    renderer.domElement.addEventListener("pointerleave", handlePointerLeave);
     renderer.domElement.addEventListener("pointermove", handlePointerMove);
     renderer.domElement.addEventListener("dblclick", handleDoubleClick);
 
@@ -432,6 +481,8 @@ export default function ThreeUniverse() {
           controls.target.distanceTo(targetGoal) < 0.015 &&
           camera.position.distanceTo(cameraGoal) < 0.02
         ) {
+          controls.target.copy(targetGoal);
+          camera.position.copy(cameraGoal);
           focusActive = false;
         }
       }
@@ -439,6 +490,7 @@ export default function ThreeUniverse() {
       controls.update();
 
       const targetDistance = camera.position.distanceTo(controls.target);
+
       if (
         !navigationLocked &&
         selectedNode?.children?.length &&
@@ -468,6 +520,7 @@ export default function ThreeUniverse() {
 
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
       renderer.domElement.removeEventListener("pointerup", handlePointerUp);
+      renderer.domElement.removeEventListener("pointerleave", handlePointerLeave);
       renderer.domElement.removeEventListener("pointermove", handlePointerMove);
       renderer.domElement.removeEventListener("dblclick", handleDoubleClick);
 
@@ -482,11 +535,11 @@ export default function ThreeUniverse() {
       earthMap?.dispose();
       cloudMap?.dispose();
       starsGeometry.dispose();
-      (stars.material as THREE.Material).dispose();
+      starsMaterial.dispose();
       renderer.dispose();
       host.replaceChildren();
     };
-  }, [currentSystem, path.length]);
+  }, [currentSystem, path.length, resetVersion]);
 
   return (
     <div style={{ position: "absolute", inset: 0 }}>
@@ -579,9 +632,9 @@ export default function ThreeUniverse() {
           lineHeight: 1.7,
         }}
       >
-        Click to focus · Double click to enter
+        Click a world to focus · Click the center world to recenter
         <br />
-        Zoom in to enter · Zoom far out to return
+        Double click to enter · Zoom far out to return
       </div>
     </div>
   );
