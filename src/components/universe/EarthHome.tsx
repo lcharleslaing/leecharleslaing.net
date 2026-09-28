@@ -6,10 +6,10 @@ import ThreeUniverse from "./ThreeUniverse";
 import styles from "./EarthHome.module.css";
 
 export default function EarthHome() {
-  const [universeResetKey, setUniverseResetKey] = useState(0);
+  const [universeResetSignal, setUniverseResetSignal] = useState(0);
 
   function resetUniverse() {
-    setUniverseResetKey((current) => current + 1);
+    setUniverseResetSignal((current) => current + 1);
   }
 
   return (
@@ -52,7 +52,7 @@ export default function EarthHome() {
         </div>
 
         <div className={styles.universeStage}>
-          <ThreeUniverse key={universeResetKey} />
+          <ThreeUniverse resetSignal={universeResetSignal} />
         </div>
 
         <div className={styles.explorePrompt} aria-hidden="true">
