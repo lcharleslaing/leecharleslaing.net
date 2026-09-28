@@ -22,11 +22,17 @@ const presence = [
 ] as const;
 
 const HOME_CAMERA = new THREE.Vector3(0, 0.35, 8.3);
+const HOME_DISTANCE = HOME_CAMERA.length();
 const ENTER_DISTANCE = 1.15;
 const EXIT_DISTANCE = 28;
 
 type ThreeUniverseProps = {
   resetSignal?: number;
+};
+
+type PresenceMarker = {
+  group: THREE.Group;
+  light: THREE.PointLight;
 };
 
 function latLonToVector3(lat: number, lon: number, radius: number) {
@@ -163,6 +169,7 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
     let earthMap: THREE.Texture | null = null;
     let cloudMap: THREE.Texture | null = null;
     let centerMesh: THREE.Mesh;
+    const presenceMarkers: PresenceMarker[] = [];
 
     if (currentSystem.id === "earth") {
       // Temporary remote textures. These will be replaced with local PWA-safe assets.
@@ -171,8 +178,8 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       cloudMap = textureLoader.load("https://threejs.org/examples/textures/planets/earth_clouds_1024.png");
       cloudMap.colorSpace = THREE.SRGBColorSpace;
 
-      // The tilt belongs to the whole Earth surface system so texture, clouds,
-      // atmosphere and latitude/longitude presence points stay locked together.
+      // Everything geographically attached to Earth lives in this same group.
+      // That keeps the texture, clouds, atmosphere and lat/lon lights locked together.
       surfaceGroup.rotation.z = THREE.MathUtils.degToRad(-6);
 
       centerMesh = new THREE.Mesh(
@@ -191,7 +198,7 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
         new THREE.MeshPhongMaterial({
           map: cloudMap,
           transparent: true,
-          opacity: 0.33,
+          opacity: 0.28,
           depthWrite: false,
         }),
       );
@@ -209,17 +216,21 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
         ),
       );
 
-      const glowGeometry = new THREE.SphereGeometry(0.035, 14, 14);
-      const glowMaterial = new THREE.MeshBasicMaterial({ color: 0xffd37d });
-
       for (const [lat, lon] of presence) {
-        const orb = new THREE.Mesh(glowGeometry, glowMaterial.clone());
-        orb.position.copy(latLonToVector3(lat, lon, 2.105));
-        surfaceGroup.add(orb);
+        const marker = new THREE.Group();
+        marker.position.copy(latLonToVector3(lat, lon, 2.105));
 
-        const halo = new THREE.PointLight(0xffa64d, 0.65, 0.55, 2);
-        halo.position.copy(orb.position);
-        surfaceGroup.add(halo);
+        const orb = new THREE.Mesh(
+          new THREE.SphereGeometry(0.026, 14, 14),
+          new THREE.MeshBasicMaterial({ color: 0xffdf9c }),
+        );
+        marker.add(orb);
+
+        const light = new THREE.PointLight(0xffb45d, 0.42, 0.24, 2);
+        marker.add(light);
+
+        surfaceGroup.add(marker);
+        presenceMarkers.push({ group: marker, light });
       }
     } else {
       centerMesh = new THREE.Mesh(
@@ -346,8 +357,8 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       setSelectedName(null);
       clearSelectionStyles();
 
-      // Earth/current center becomes the orbit pivot immediately. The camera can
-      // still ease home, but any drag from this point rotates around the center.
+      // Re-establish the center world as the actual OrbitControls pivot now,
+      // not after the camera animation finishes.
       controls.target.set(0, 0, 0);
       targetGoal.set(0, 0, 0);
       cameraGoal.copy(HOME_CAMERA);
@@ -364,8 +375,7 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
     const getHit = (event: PointerEvent | MouseEvent) => {
       setPointerFromEvent(event);
       raycaster.setFromCamera(pointer, camera);
-      const targets = [centerMesh, ...childMeshes.map((item) => item.mesh)];
-      const hits = raycaster.intersectObjects(targets, false);
+      const hits = raycaster.intersectObjects([centerMesh, ...childMeshes.map((item) => item.mesh)], false);
       if (hits.length === 0) return null;
 
       const mesh = hits[0].object as THREE.Mesh;
@@ -470,14 +480,14 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
     resizeObserver.observe(host);
 
     const clock = new THREE.Clock();
+    const markerWorldPosition = new THREE.Vector3();
 
     const render = () => {
       if (disposed) return;
       const delta = clock.getDelta();
 
-      // Slow self-rotation is applied to the complete surface group, not just the
-      // decorative skin. Lat/lon presence points therefore remain geographically
-      // attached to the same places while Earth turns.
+      // Slow self-rotation is applied to the complete surface group so all
+      // latitude/longitude points remain attached to the same map coordinates.
       if (!pointerDown) {
         surfaceGroup.rotation.y += delta * (currentSystem.id === "earth" ? 0.045 : 0.025);
         orbitGroup.rotation.y += delta * 0.014;
@@ -502,6 +512,19 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       }
 
       controls.update();
+
+      // Presence lights are geographic markers, not giant physical lamps.
+      // Up close, scale them down in world space so their apparent screen size
+      // stays restrained. Far away, stop compensating so they naturally become
+      // smaller and denser as more of the globe comes into view.
+      presenceMarkers.forEach(({ group, light }) => {
+        group.getWorldPosition(markerWorldPosition);
+        const distanceToCamera = camera.position.distanceTo(markerWorldPosition);
+        const markerScale = THREE.MathUtils.clamp(distanceToCamera / HOME_DISTANCE, 0.045, 1);
+        group.scale.setScalar(markerScale);
+        light.intensity = 0.42 * Math.max(markerScale, 0.18);
+        light.distance = 0.24 * markerScale;
+      });
 
       const targetDistance = camera.position.distanceTo(controls.target);
       if (!navigationLocked && selectedNode?.children?.length && targetDistance < ENTER_DISTANCE) {
@@ -586,7 +609,7 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
         <button
           type="button"
           onClick={hardResetToEarth}
-          title="Return to Earth"
+          title="Return to Earth (Home key)"
           aria-label="Return to Earth"
           style={{
             width: "42px",
@@ -643,7 +666,7 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       >
         Click a world to focus · Click the center world to recenter
         <br />
-        Double click to enter · Zoom far out to return
+        Double click to enter · Home key returns to Earth
       </div>
     </div>
   );
