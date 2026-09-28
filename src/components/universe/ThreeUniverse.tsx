@@ -1,18 +1,10 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
-
-const worlds = [
-  { name: "Music", color: 0xff9d3d, radius: 3.8, angle: 0.2, y: 0.9 },
-  { name: "Engineering", color: 0x8ca8ff, radius: 4.4, angle: 1.35, y: 0.15 },
-  { name: "Programming", color: 0x37d8ff, radius: 4.1, angle: 2.55, y: -0.8 },
-  { name: "Stories", color: 0xbf68ff, radius: 4.5, angle: 3.5, y: 0.65 },
-  { name: "Video", color: 0xff604f, radius: 4.0, angle: 4.55, y: -0.55 },
-  { name: "Thought / Faith", color: 0xf4d45c, radius: 4.55, angle: 5.55, y: 1.15 },
-] as const;
+import { universeRoot, type UniverseNode } from "./universeData";
 
 const presence = [
   [43.7, -84.5],
@@ -29,6 +21,10 @@ const presence = [
   [-33.9, 151.2],
 ] as const;
 
+const HOME_CAMERA = new THREE.Vector3(0, 0.35, 8.3);
+const ENTER_DISTANCE = 1.15;
+const EXIT_DISTANCE = 28;
+
 function latLonToVector3(lat: number, lon: number, radius: number) {
   const phi = (90 - lat) * (Math.PI / 180);
   const theta = (lon + 180) * (Math.PI / 180);
@@ -40,18 +36,68 @@ function latLonToVector3(lat: number, lon: number, radius: number) {
   );
 }
 
+function getNodePosition(node: UniverseNode) {
+  const radius = node.orbitRadius ?? 4.2;
+  const angle = node.angle ?? 0;
+  return new THREE.Vector3(
+    Math.cos(angle) * radius,
+    node.y ?? 0,
+    Math.sin(angle) * radius,
+  );
+}
+
+function createLabel(text: string) {
+  const labelEl = document.createElement("div");
+  labelEl.textContent = text;
+  labelEl.style.color = "rgba(255,255,255,.92)";
+  labelEl.style.fontSize = "11px";
+  labelEl.style.letterSpacing = "0.22em";
+  labelEl.style.textTransform = "uppercase";
+  labelEl.style.whiteSpace = "nowrap";
+  labelEl.style.textShadow = "0 2px 12px rgba(0,0,0,.95)";
+  labelEl.style.transform = "translateY(18px)";
+  labelEl.style.transition = "opacity 180ms ease";
+  return labelEl;
+}
+
 export default function ThreeUniverse() {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const [path, setPath] = useState<UniverseNode[]>([universeRoot]);
+  const [selectedName, setSelectedName] = useState<string | null>(null);
+
+  const currentSystem = path[path.length - 1];
+  const breadcrumb = useMemo(() => path.map((node) => node.name).join("  /  "), [path]);
+
+  function goHome() {
+    setSelectedName(null);
+    setPath([universeRoot]);
+  }
+
+  function goBack() {
+    if (path.length <= 1) return;
+    setSelectedName(null);
+    setPath((current) => current.slice(0, -1));
+  }
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
 
+    let disposed = false;
+    let navigationLocked = false;
+    let animationFrame = 0;
+    let pointerDown = false;
+    let pointerStart = { x: 0, y: 0 };
+    let selectedNode: UniverseNode | null = null;
+    let selectedMesh: THREE.Mesh | null = null;
+    let selectedLabel: HTMLElement | null = null;
+    let focusActive = false;
+
     const scene = new THREE.Scene();
     scene.background = null;
 
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
-    camera.position.set(0, 0.35, 8.3);
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 400);
+    camera.position.copy(HOME_CAMERA);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -61,6 +107,7 @@ export default function ThreeUniverse() {
     renderer.domElement.style.width = "100%";
     renderer.domElement.style.height = "100%";
     renderer.domElement.style.display = "block";
+    renderer.domElement.style.cursor = "grab";
     host.appendChild(renderer.domElement);
 
     const labelRenderer = new CSS2DRenderer();
@@ -73,11 +120,11 @@ export default function ThreeUniverse() {
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enablePan = false;
     controls.enableDamping = true;
-    controls.dampingFactor = 0.075;
-    controls.rotateSpeed = 0.55;
-    controls.zoomSpeed = 0.7;
-    controls.minDistance = 5.2;
-    controls.maxDistance = 12;
+    controls.dampingFactor = 0.065;
+    controls.rotateSpeed = 0.52;
+    controls.zoomSpeed = 1.05;
+    controls.minDistance = 0.52;
+    controls.maxDistance = 60;
     controls.target.set(0, 0, 0);
 
     const ambient = new THREE.AmbientLight(0x6b7ba6, 0.72);
@@ -92,109 +139,153 @@ export default function ThreeUniverse() {
     scene.add(rim);
 
     const textureLoader = new THREE.TextureLoader();
-    const earthMap = textureLoader.load("https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg");
-    earthMap.colorSpace = THREE.SRGBColorSpace;
-    const cloudMap = textureLoader.load("https://threejs.org/examples/textures/planets/earth_clouds_1024.png");
-    cloudMap.colorSpace = THREE.SRGBColorSpace;
+    const centerGroup = new THREE.Group();
+    scene.add(centerGroup);
 
-    const earthGroup = new THREE.Group();
-    scene.add(earthGroup);
+    let earthMap: THREE.Texture | null = null;
+    let cloudMap: THREE.Texture | null = null;
+    let centerMesh: THREE.Mesh;
+    let clouds: THREE.Mesh | null = null;
 
-    const earth = new THREE.Mesh(
-      new THREE.SphereGeometry(2.05, 96, 96),
-      new THREE.MeshPhongMaterial({ map: earthMap, shininess: 7, specular: new THREE.Color(0x22384a) }),
-    );
-    earth.rotation.z = THREE.MathUtils.degToRad(-6);
-    earthGroup.add(earth);
+    if (currentSystem.id === "earth") {
+      earthMap = textureLoader.load("https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg");
+      earthMap.colorSpace = THREE.SRGBColorSpace;
+      cloudMap = textureLoader.load("https://threejs.org/examples/textures/planets/earth_clouds_1024.png");
+      cloudMap.colorSpace = THREE.SRGBColorSpace;
 
-    const clouds = new THREE.Mesh(
-      new THREE.SphereGeometry(2.075, 96, 96),
-      new THREE.MeshPhongMaterial({
-        map: cloudMap,
-        transparent: true,
-        opacity: 0.33,
-        depthWrite: false,
-      }),
-    );
-    clouds.rotation.z = earth.rotation.z;
-    earthGroup.add(clouds);
+      centerMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(2.05, 96, 96),
+        new THREE.MeshPhongMaterial({
+          color: 0xffffff,
+          map: earthMap,
+          shininess: 7,
+          specular: new THREE.Color(0x22384a),
+        }),
+      );
+      centerMesh.rotation.z = THREE.MathUtils.degToRad(-6);
+      centerGroup.add(centerMesh);
 
-    const atmosphere = new THREE.Mesh(
-      new THREE.SphereGeometry(2.12, 64, 64),
-      new THREE.MeshBasicMaterial({ color: 0x55aaff, transparent: true, opacity: 0.055, side: THREE.BackSide }),
-    );
-    earthGroup.add(atmosphere);
+      clouds = new THREE.Mesh(
+        new THREE.SphereGeometry(2.075, 96, 96),
+        new THREE.MeshPhongMaterial({
+          map: cloudMap,
+          transparent: true,
+          opacity: 0.33,
+          depthWrite: false,
+        }),
+      );
+      clouds.rotation.z = centerMesh.rotation.z;
+      centerGroup.add(clouds);
 
-    const glowMaterial = new THREE.MeshBasicMaterial({ color: 0xffd37d });
-    const glowGeometry = new THREE.SphereGeometry(0.035, 14, 14);
+      const atmosphere = new THREE.Mesh(
+        new THREE.SphereGeometry(2.12, 64, 64),
+        new THREE.MeshBasicMaterial({
+          color: 0x55aaff,
+          transparent: true,
+          opacity: 0.055,
+          side: THREE.BackSide,
+        }),
+      );
+      centerGroup.add(atmosphere);
 
-    for (const [lat, lon] of presence) {
-      const orb = new THREE.Mesh(glowGeometry, glowMaterial.clone());
-      orb.position.copy(latLonToVector3(lat, lon, 2.105));
-      earthGroup.add(orb);
+      const glowGeometry = new THREE.SphereGeometry(0.035, 14, 14);
+      const glowMaterial = new THREE.MeshBasicMaterial({ color: 0xffd37d });
 
-      const halo = new THREE.PointLight(0xffa64d, 0.65, 0.55, 2);
-      halo.position.copy(orb.position);
-      earthGroup.add(halo);
+      for (const [lat, lon] of presence) {
+        const orb = new THREE.Mesh(glowGeometry, glowMaterial.clone());
+        orb.position.copy(latLonToVector3(lat, lon, 2.105));
+        centerGroup.add(orb);
+
+        const halo = new THREE.PointLight(0xffa64d, 0.65, 0.55, 2);
+        halo.position.copy(orb.position);
+        centerGroup.add(halo);
+      }
+    } else {
+      const centerColor = currentSystem.color;
+      centerMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(2.05, 96, 96),
+        new THREE.MeshStandardMaterial({
+          color: centerColor,
+          emissive: centerColor,
+          emissiveIntensity: 0.22,
+          roughness: 0.7,
+          metalness: 0.08,
+        }),
+      );
+      centerGroup.add(centerMesh);
+
+      const centerGlow = new THREE.Mesh(
+        new THREE.SphereGeometry(2.12, 64, 64),
+        new THREE.MeshBasicMaterial({
+          color: centerColor,
+          transparent: true,
+          opacity: 0.07,
+          side: THREE.BackSide,
+        }),
+      );
+      centerGroup.add(centerGlow);
     }
+
+    const centerLabelEl = createLabel(currentSystem.name);
+    centerLabelEl.style.fontSize = "12px";
+    centerLabelEl.style.opacity = currentSystem.id === "earth" ? "0" : "0.72";
+    const centerLabel = new CSS2DObject(centerLabelEl);
+    centerLabel.position.set(0, -2.45, 0);
+    centerGroup.add(centerLabel);
 
     const orbitGroup = new THREE.Group();
     scene.add(orbitGroup);
 
-    const orbitGeometry = new THREE.RingGeometry(3.55, 3.565, 180);
-    const orbitMaterial = new THREE.MeshBasicMaterial({
-      color: 0x7da8ff,
-      transparent: true,
-      opacity: 0.095,
-      side: THREE.DoubleSide,
-    });
-    const orbitRing = new THREE.Mesh(orbitGeometry, orbitMaterial);
-    orbitRing.rotation.x = Math.PI / 2;
-    orbitGroup.add(orbitRing);
+    const children = currentSystem.children ?? [];
+    const childMeshes: Array<{ node: UniverseNode; mesh: THREE.Mesh; labelEl: HTMLElement }> = [];
 
-    const worldMeshes: THREE.Mesh[] = [];
+    children.forEach((node, index) => {
+      const radius = node.orbitRadius ?? 4.2;
+      const orbitGeometry = new THREE.RingGeometry(radius - 0.008, radius + 0.008, 220);
+      const orbitMaterial = new THREE.MeshBasicMaterial({
+        color: node.color,
+        transparent: true,
+        opacity: 0.045,
+        side: THREE.DoubleSide,
+      });
+      const orbitRing = new THREE.Mesh(orbitGeometry, orbitMaterial);
+      orbitRing.rotation.x = Math.PI / 2;
+      orbitGroup.add(orbitRing);
 
-    worlds.forEach((world, index) => {
       const planet = new THREE.Mesh(
-        new THREE.SphereGeometry(index === 0 ? 0.34 : 0.25, 36, 36),
+        new THREE.SphereGeometry(node.size ?? 0.27, 42, 42),
         new THREE.MeshStandardMaterial({
-          color: world.color,
-          emissive: world.color,
-          emissiveIntensity: index === 0 ? 0.55 : 0.36,
+          color: node.color,
+          emissive: node.color,
+          emissiveIntensity: index === 0 ? 0.48 : 0.3,
           roughness: 0.72,
           metalness: 0.08,
         }),
       );
 
-      planet.position.set(Math.cos(world.angle) * world.radius, world.y, Math.sin(world.angle) * world.radius);
+      planet.position.copy(getNodePosition(node));
+      planet.userData.nodeId = node.id;
       orbitGroup.add(planet);
-      worldMeshes.push(planet);
 
-      const light = new THREE.PointLight(world.color, index === 0 ? 1.2 : 0.65, 2.2, 2);
+      const light = new THREE.PointLight(node.color, index === 0 ? 1.1 : 0.55, 2.2, 2);
       light.position.copy(planet.position);
       orbitGroup.add(light);
 
-      const labelEl = document.createElement("div");
-      labelEl.textContent = world.name;
-      labelEl.style.color = "rgba(255,255,255,.9)";
-      labelEl.style.fontSize = "11px";
-      labelEl.style.letterSpacing = "0.22em";
-      labelEl.style.textTransform = "uppercase";
-      labelEl.style.whiteSpace = "nowrap";
-      labelEl.style.textShadow = "0 2px 12px rgba(0,0,0,.95)";
-      labelEl.style.transform = "translateY(18px)";
-
+      const labelEl = createLabel(node.name);
+      labelEl.style.opacity = "0.82";
       const label = new CSS2DObject(labelEl);
-      label.position.set(0, -0.42, 0);
+      label.position.set(0, -(node.size ?? 0.27) - 0.2, 0);
       planet.add(label);
+
+      childMeshes.push({ node, mesh: planet, labelEl });
     });
 
     const starsGeometry = new THREE.BufferGeometry();
-    const starCount = 1600;
+    const starCount = 2000;
     const positions = new Float32Array(starCount * 3);
 
     for (let i = 0; i < starCount; i += 1) {
-      const r = 18 + Math.random() * 32;
+      const r = 18 + Math.random() * 70;
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(2 * Math.random() - 1);
       positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
@@ -205,20 +296,105 @@ export default function ThreeUniverse() {
     starsGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     const stars = new THREE.Points(
       starsGeometry,
-      new THREE.PointsMaterial({ color: 0xffffff, size: 0.035, transparent: true, opacity: 0.86, sizeAttenuation: true }),
+      new THREE.PointsMaterial({
+        color: 0xffffff,
+        size: 0.035,
+        transparent: true,
+        opacity: 0.86,
+        sizeAttenuation: true,
+      }),
     );
     scene.add(stars);
 
-    let pointerDown = false;
-    renderer.domElement.addEventListener("pointerdown", () => {
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    const targetGoal = new THREE.Vector3(0, 0, 0);
+    const cameraGoal = HOME_CAMERA.clone();
+
+    const setPointerFromEvent = (event: PointerEvent | MouseEvent) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    };
+
+    const getHit = (event: PointerEvent | MouseEvent) => {
+      setPointerFromEvent(event);
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObjects(childMeshes.map((item) => item.mesh), false);
+      if (hits.length === 0) return null;
+      const mesh = hits[0].object as THREE.Mesh;
+      return childMeshes.find((item) => item.mesh === mesh) ?? null;
+    };
+
+    const focusNode = (item: { node: UniverseNode; mesh: THREE.Mesh; labelEl: HTMLElement }) => {
+      selectedNode = item.node;
+      selectedMesh = item.mesh;
+      selectedLabel = item.labelEl;
+      setSelectedName(item.node.name);
+
+      childMeshes.forEach(({ mesh, labelEl }) => {
+        const material = mesh.material as THREE.MeshStandardMaterial;
+        material.emissiveIntensity = mesh === item.mesh ? 0.95 : 0.24;
+        labelEl.style.opacity = mesh === item.mesh ? "1" : "0.42";
+      });
+
+      const worldPosition = new THREE.Vector3();
+      item.mesh.getWorldPosition(worldPosition);
+      targetGoal.copy(worldPosition);
+
+      const direction = camera.position.clone().sub(controls.target);
+      if (direction.lengthSq() < 0.001) direction.set(0, 0.25, 1);
+      direction.normalize();
+      cameraGoal.copy(worldPosition).add(direction.multiplyScalar(3.25));
+      focusActive = true;
+    };
+
+    const enterNode = (node: UniverseNode) => {
+      if (!node.children?.length || navigationLocked) return;
+      navigationLocked = true;
+      setSelectedName(null);
+      setPath((current) => [...current, node]);
+    };
+
+    const handlePointerDown = (event: PointerEvent) => {
       pointerDown = true;
-    });
-    renderer.domElement.addEventListener("pointerup", () => {
+      pointerStart = { x: event.clientX, y: event.clientY };
+      renderer.domElement.style.cursor = "grabbing";
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      const moved = Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y);
       pointerDown = false;
-    });
+      renderer.domElement.style.cursor = "grab";
+
+      if (moved > 5) return;
+      const hit = getHit(event);
+      if (hit) focusNode(hit);
+    };
+
+    const handleDoubleClick = (event: MouseEvent) => {
+      const hit = getHit(event);
+      if (!hit) return;
+      focusNode(hit);
+      if (hit.node.children?.length) {
+        window.setTimeout(() => enterNode(hit.node), 180);
+      }
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (pointerDown) return;
+      const hit = getHit(event);
+      renderer.domElement.style.cursor = hit ? "pointer" : "grab";
+    };
+
+    renderer.domElement.addEventListener("pointerdown", handlePointerDown);
+    renderer.domElement.addEventListener("pointerup", handlePointerUp);
     renderer.domElement.addEventListener("pointerleave", () => {
       pointerDown = false;
+      renderer.domElement.style.cursor = "grab";
     });
+    renderer.domElement.addEventListener("pointermove", handlePointerMove);
+    renderer.domElement.addEventListener("dblclick", handleDoubleClick);
 
     const resize = () => {
       const { clientWidth, clientHeight } = host;
@@ -233,22 +409,50 @@ export default function ThreeUniverse() {
     resizeObserver.observe(host);
 
     const clock = new THREE.Clock();
-    let animationFrame = 0;
 
     const render = () => {
+      if (disposed) return;
       const delta = clock.getDelta();
 
       if (!pointerDown) {
-        earth.rotation.y += delta * 0.045;
-        clouds.rotation.y += delta * 0.058;
-        orbitGroup.rotation.y += delta * 0.018;
+        centerMesh.rotation.y += delta * (currentSystem.id === "earth" ? 0.045 : 0.025);
+        if (clouds) clouds.rotation.y += delta * 0.058;
+        orbitGroup.rotation.y += delta * 0.014;
       }
 
-      worldMeshes.forEach((mesh, index) => {
-        mesh.rotation.y += delta * (0.16 + index * 0.018);
+      childMeshes.forEach(({ mesh }, index) => {
+        mesh.rotation.y += delta * (0.14 + index * 0.012);
       });
 
+      if (focusActive) {
+        controls.target.lerp(targetGoal, 0.09);
+        camera.position.lerp(cameraGoal, 0.075);
+
+        if (
+          controls.target.distanceTo(targetGoal) < 0.015 &&
+          camera.position.distanceTo(cameraGoal) < 0.02
+        ) {
+          focusActive = false;
+        }
+      }
+
       controls.update();
+
+      const targetDistance = camera.position.distanceTo(controls.target);
+      if (
+        !navigationLocked &&
+        selectedNode?.children?.length &&
+        targetDistance < ENTER_DISTANCE
+      ) {
+        enterNode(selectedNode);
+      }
+
+      if (!navigationLocked && path.length > 1 && targetDistance > EXIT_DISTANCE) {
+        navigationLocked = true;
+        setSelectedName(null);
+        setPath((current) => current.slice(0, -1));
+      }
+
       renderer.render(scene, camera);
       labelRenderer.render(scene, camera);
       animationFrame = window.requestAnimationFrame(render);
@@ -257,21 +461,128 @@ export default function ThreeUniverse() {
     render();
 
     return () => {
+      disposed = true;
       window.cancelAnimationFrame(animationFrame);
       resizeObserver.disconnect();
       controls.dispose();
-      renderer.dispose();
-      earthMap.dispose();
-      cloudMap.dispose();
+
+      renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
+      renderer.domElement.removeEventListener("pointerup", handlePointerUp);
+      renderer.domElement.removeEventListener("pointermove", handlePointerMove);
+      renderer.domElement.removeEventListener("dblclick", handleDoubleClick);
+
+      scene.traverse((object) => {
+        if (object instanceof THREE.Mesh) {
+          object.geometry.dispose();
+          const materials = Array.isArray(object.material) ? object.material : [object.material];
+          materials.forEach((material) => material.dispose());
+        }
+      });
+
+      earthMap?.dispose();
+      cloudMap?.dispose();
       starsGeometry.dispose();
       (stars.material as THREE.Material).dispose();
-      glowGeometry.dispose();
-      glowMaterial.dispose();
-      orbitGeometry.dispose();
-      orbitMaterial.dispose();
+      renderer.dispose();
       host.replaceChildren();
     };
-  }, []);
+  }, [currentSystem, path.length]);
 
-  return <div ref={hostRef} style={{ position: "absolute", inset: 0 }} />;
+  return (
+    <div style={{ position: "absolute", inset: 0 }}>
+      <div ref={hostRef} style={{ position: "absolute", inset: 0 }} />
+
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: "18.5%",
+          transform: "translateX(-50%)",
+          zIndex: 8,
+          pointerEvents: "none",
+          color: "rgba(255,255,255,.62)",
+          fontSize: "10px",
+          letterSpacing: ".22em",
+          textTransform: "uppercase",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {breadcrumb}
+        {selectedName ? `  ·  ${selectedName}` : ""}
+      </div>
+
+      <div
+        style={{
+          position: "absolute",
+          left: "24px",
+          bottom: "24px",
+          zIndex: 10,
+          display: "flex",
+          gap: "10px",
+        }}
+      >
+        <button
+          type="button"
+          onClick={goHome}
+          title="Return to Earth"
+          aria-label="Return to Earth"
+          style={{
+            width: "42px",
+            height: "42px",
+            borderRadius: "50%",
+            border: "1px solid rgba(255,255,255,.24)",
+            background: "rgba(3,7,14,.54)",
+            color: "rgba(255,255,255,.9)",
+            backdropFilter: "blur(10px)",
+            cursor: "pointer",
+            fontSize: "18px",
+          }}
+        >
+          ◎
+        </button>
+
+        {path.length > 1 ? (
+          <button
+            type="button"
+            onClick={goBack}
+            aria-label="Go back one universe level"
+            style={{
+              borderRadius: "999px",
+              border: "1px solid rgba(255,255,255,.2)",
+              background: "rgba(3,7,14,.54)",
+              color: "rgba(255,255,255,.82)",
+              backdropFilter: "blur(10px)",
+              cursor: "pointer",
+              padding: "0 16px",
+              fontSize: "10px",
+              letterSpacing: ".18em",
+              textTransform: "uppercase",
+            }}
+          >
+            Back
+          </button>
+        ) : null}
+      </div>
+
+      <div
+        style={{
+          position: "absolute",
+          right: "24px",
+          bottom: "26px",
+          zIndex: 8,
+          pointerEvents: "none",
+          color: "rgba(255,255,255,.48)",
+          fontSize: "9px",
+          letterSpacing: ".18em",
+          textTransform: "uppercase",
+          textAlign: "right",
+          lineHeight: 1.7,
+        }}
+      >
+        Click to focus · Double click to enter
+        <br />
+        Zoom in to enter · Zoom far out to return
+      </div>
+    </div>
+  );
 }
