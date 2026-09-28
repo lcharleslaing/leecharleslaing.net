@@ -25,6 +25,10 @@ const HOME_CAMERA = new THREE.Vector3(0, 0.35, 8.3);
 const HOME_DISTANCE = HOME_CAMERA.length();
 const ENTER_DISTANCE = 1.15;
 const EXIT_DISTANCE = 28;
+const EARTH_RADIUS = 2.05;
+const CLOUD_RADIUS = 2.053;
+const PRESENCE_RADIUS = 2.056;
+const SURFACE_NORMAL_AXIS = new THREE.Vector3(0, 0, 1);
 
 type ThreeUniverseProps = {
   resetSignal?: number;
@@ -32,7 +36,6 @@ type ThreeUniverseProps = {
 
 type PresenceMarker = {
   group: THREE.Group;
-  light: THREE.PointLight;
 };
 
 function latLonToVector3(lat: number, lon: number, radius: number) {
@@ -69,6 +72,11 @@ function createLabel(text: string) {
   labelEl.style.transform = "translateY(18px)";
   labelEl.style.transition = "opacity 180ms ease";
   return labelEl;
+}
+
+function orientMarkerToSurface(marker: THREE.Group, position: THREE.Vector3) {
+  const outwardNormal = position.clone().normalize();
+  marker.quaternion.setFromUnitVectors(SURFACE_NORMAL_AXIS, outwardNormal);
 }
 
 export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
@@ -178,12 +186,12 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       cloudMap = textureLoader.load("https://threejs.org/examples/textures/planets/earth_clouds_1024.png");
       cloudMap.colorSpace = THREE.SRGBColorSpace;
 
-      // Everything geographically attached to Earth lives in this same group.
-      // That keeps the texture, clouds, atmosphere and lat/lon lights locked together.
+      // Texture, clouds, atmosphere and geographic markers share one transform,
+      // so latitude/longitude markers stay attached while Earth slowly rotates.
       surfaceGroup.rotation.z = THREE.MathUtils.degToRad(-6);
 
       centerMesh = new THREE.Mesh(
-        new THREE.SphereGeometry(2.05, 96, 96),
+        new THREE.SphereGeometry(EARTH_RADIUS, 96, 96),
         new THREE.MeshPhongMaterial({
           color: 0xffffff,
           map: earthMap,
@@ -194,7 +202,7 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       surfaceGroup.add(centerMesh);
 
       const clouds = new THREE.Mesh(
-        new THREE.SphereGeometry(2.075, 96, 96),
+        new THREE.SphereGeometry(CLOUD_RADIUS, 96, 96),
         new THREE.MeshPhongMaterial({
           map: cloudMap,
           transparent: true,
@@ -217,20 +225,43 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       );
 
       for (const [lat, lon] of presence) {
+        const markerPosition = latLonToVector3(lat, lon, PRESENCE_RADIUS);
         const marker = new THREE.Group();
-        marker.position.copy(latLonToVector3(lat, lon, 2.105));
+        marker.position.copy(markerPosition);
+        orientMarkerToSurface(marker, markerPosition);
 
-        const orb = new THREE.Mesh(
-          new THREE.SphereGeometry(0.026, 14, 14),
-          new THREE.MeshBasicMaterial({ color: 0xffdf9c }),
+        // These are surface decals, not little 3D satellites. CircleGeometry lies
+        // flat against the tangent plane of the globe, with only a tiny radial
+        // offset to avoid z-fighting.
+        const halo = new THREE.Mesh(
+          new THREE.CircleGeometry(0.065, 32),
+          new THREE.MeshBasicMaterial({
+            color: 0xffc873,
+            transparent: true,
+            opacity: 0.2,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            side: THREE.FrontSide,
+          }),
         );
-        marker.add(orb);
+        halo.position.z = 0.0005;
+        marker.add(halo);
 
-        const light = new THREE.PointLight(0xffb45d, 0.42, 0.24, 2);
-        marker.add(light);
+        const core = new THREE.Mesh(
+          new THREE.CircleGeometry(0.021, 28),
+          new THREE.MeshBasicMaterial({
+            color: 0xffe6ae,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            side: THREE.FrontSide,
+          }),
+        );
+        core.position.z = 0.001;
+        marker.add(core);
 
         surfaceGroup.add(marker);
-        presenceMarkers.push({ group: marker, light });
+        presenceMarkers.push({ group: marker });
       }
     } else {
       centerMesh = new THREE.Mesh(
@@ -356,9 +387,6 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       selectedNode = null;
       setSelectedName(null);
       clearSelectionStyles();
-
-      // Re-establish the center world as the actual OrbitControls pivot now,
-      // not after the camera animation finishes.
       controls.target.set(0, 0, 0);
       targetGoal.set(0, 0, 0);
       cameraGoal.copy(HOME_CAMERA);
@@ -461,11 +489,26 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       renderer.domElement.style.cursor = "grab";
     };
 
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Home") return;
+
+      const target = event.target as HTMLElement | null;
+      const isEditing =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.isContentEditable;
+      if (isEditing) return;
+
+      event.preventDefault();
+      hardResetToEarth();
+    };
+
     renderer.domElement.addEventListener("pointerdown", handlePointerDown);
     renderer.domElement.addEventListener("pointerup", handlePointerUp);
     renderer.domElement.addEventListener("pointerleave", handlePointerLeave);
     renderer.domElement.addEventListener("pointermove", handlePointerMove);
     renderer.domElement.addEventListener("dblclick", handleDoubleClick);
+    window.addEventListener("keydown", handleKeyDown);
 
     const resize = () => {
       const { clientWidth, clientHeight } = host;
@@ -486,8 +529,6 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       if (disposed) return;
       const delta = clock.getDelta();
 
-      // Slow self-rotation is applied to the complete surface group so all
-      // latitude/longitude points remain attached to the same map coordinates.
       if (!pointerDown) {
         surfaceGroup.rotation.y += delta * (currentSystem.id === "earth" ? 0.045 : 0.025);
         orbitGroup.rotation.y += delta * 0.014;
@@ -513,17 +554,14 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
 
       controls.update();
 
-      // Presence lights are geographic markers, not giant physical lamps.
-      // Up close, scale them down in world space so their apparent screen size
-      // stays restrained. Far away, stop compensating so they naturally become
-      // smaller and denser as more of the globe comes into view.
-      presenceMarkers.forEach(({ group, light }) => {
+      // Keep geographic markers visually restrained as the camera approaches,
+      // without moving them away from the surface. Their position remains fixed;
+      // only their local decal size changes.
+      presenceMarkers.forEach(({ group }) => {
         group.getWorldPosition(markerWorldPosition);
         const distanceToCamera = camera.position.distanceTo(markerWorldPosition);
-        const markerScale = THREE.MathUtils.clamp(distanceToCamera / HOME_DISTANCE, 0.045, 1);
+        const markerScale = THREE.MathUtils.clamp(distanceToCamera / HOME_DISTANCE, 0.05, 1);
         group.scale.setScalar(markerScale);
-        light.intensity = 0.42 * Math.max(markerScale, 0.18);
-        light.distance = 0.24 * markerScale;
       });
 
       const targetDistance = camera.position.distanceTo(controls.target);
@@ -555,6 +593,7 @@ export default function ThreeUniverse({ resetSignal = 0 }: ThreeUniverseProps) {
       renderer.domElement.removeEventListener("pointerleave", handlePointerLeave);
       renderer.domElement.removeEventListener("pointermove", handlePointerMove);
       renderer.domElement.removeEventListener("dblclick", handleDoubleClick);
+      window.removeEventListener("keydown", handleKeyDown);
 
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh) {
